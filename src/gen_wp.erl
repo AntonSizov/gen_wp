@@ -35,6 +35,8 @@
 	}).
 
 %%% Declare behaviour
+-spec behaviour_info(callbacks) ->
+	[ { atom(), integer() } ].
 behaviour_info(callbacks) ->
 	[
 		{ init, 1 },
@@ -66,21 +68,42 @@ start_link( Reg, Mod, Arg, Opts ) ->
 	PoolSize = proplists:get_value( pool_size, Opts, infinity ),
 	gen_server:start_link(Reg, ?MODULE, { main, Mod, Arg, PoolSize }, proplists:delete(pool_size, Opts) ).
 
+-type name() :: atom().
+-type global_name() :: term().
+-type via_name() :: term().
+-type server_ref() ::
+	name() |
+	{ name(), node() } |
+	{ global, global_name() } |
+	{ via, module(), via_name() } |
+	pid().
+-type request() :: term().
+-type reply() :: term().
+-type gwp_timeout() :: pos_integer() | infinity.
+-type from() :: { pid(), term() }.
 
+-spec call( server_ref(), request() ) -> reply().
 call( Server, Request ) ->
 	gen_server:call( Server, { 'gen_wp.call', Request } ).
 
+-spec call( server_ref(), request(), gwp_timeout() ) -> reply().
 call( Server, Request, Timeout ) ->
 	gen_server:call( Server, { 'gen_wp.call', Request }, Timeout ).
 
+-spec cast( server_ref(), request() ) -> ok.
 cast( Server, Message ) ->
 	gen_server:cast( Server, { 'gen_wp.cast', Message } ).
 
+-spec reply( { 'gen_wp.reply_to', from() }, term() ) -> term().
 reply( { 'gen_wp.reply_to', ReplyTo }, ReplyWith ) ->
 	gen_server:reply( ReplyTo, ReplyWith ).
 
 %%% Behave as gen_server
 
+-spec init({ main, atom(), term(), infinity | integer() }) ->
+	{ ok, #s{} } |
+	{ ok, #s{}, non_neg_integer() | infinity } |
+	{ ok, #s{}, hibernate}.
 init({ main, Mod, Arg, PoolSize }) ->
 	{ok, ForkSup} = gen_wp_fork_sup:start_link( self(), Mod, Arg ),
 	Ctx = #gwp_ctx{
@@ -109,6 +132,17 @@ init({ main, Mod, Arg, PoolSize }) ->
 			{ stop, { bad_return_value, Else } }
 	end.
 
+-spec handle_call( { 'gen_wp.call', request() }, from(), #s{}) ->
+	{ reply, from(), #s{} } |
+	{ reply, from(), #s{}, timeout() } |
+	{ reply, from(), #s{}, hibernate } |
+	{ noreply, #s{} } |
+	{ noreply, #s{}, timeout() } |
+	{ noreply, #s{}, hibernate } |
+	{ stop, term(), term(), #s{} } |
+	{ stop, term(), #s{} };
+				(term(), from(), #s{}) ->
+	{ stop, { badarg, term() }, badarg, #s{} }.
 handle_call( { 'gen_wp.call', Request }, From, State = #s{
 		mod = Mod,
 		mod_state = ModState,
@@ -152,6 +186,21 @@ handle_call( { 'gen_wp.call', Request }, From, State = #s{
 handle_call( Request, _From, State = #s{} ) ->
 	{ stop, { badarg, Request }, badarg, State }.
 
+-spec handle_cast( { 'gen_wp.child_forked', term(), term() }, #s{} ) ->
+	{ noreply, #s{} } |
+	{ stop, {bad_return_value, term() }, #s{} };
+				( { 'gen_wp.child_terminated', term(), term(), term() }, #s{} ) ->
+	{ noreply, #s{} } |
+	{ stop, { bad_return_value, term() }, #s{} };
+				( { 'gen_wp.cast', term() }, #s{} ) ->
+	{ noreply, #s{} } |
+	{ noreply, #s{}, timeout() } |
+	{ noreply, #s{} } |
+	{ noreply, #s{}, timeout() } |
+	{ stop, term(), #s{} } |
+	{ stop, { bad_return_value, term() }, #s{} };
+			( term(), #s{} ) ->
+	{ stop, { badarg, term() }, #s{} }.
 handle_cast( { 'gen_wp.child_forked', Task, Child }, State = #s{
 		mod = Mod,
 		mod_state = ModState
@@ -215,6 +264,13 @@ handle_cast( { 'gen_wp.cast', Message }, State = #s{
 handle_cast( Message, State = #s{} ) ->
 	{ stop, { badarg, Message }, State }.
 
+-spec handle_info( { 'DOWN', reference(), process, pid(), term() }, #s{} ) ->
+	{ noreply, #s{} } |
+	{ noreply, #s{}, timeout() } |
+	{ stop, term(), #s{} } |
+	{ noreply, #s{} } |
+	{ noreply, #s{}, timeout() } |
+	{ stop, { bad_return_value, term() }, #s{} }.
 handle_info( Info = {'DOWN', MonRef, process, _Pid, Reason }, State = #s{
 		ctx = Ctx,
 		fork_sup = ForkSup
@@ -228,7 +284,7 @@ handle_info( Info = {'DOWN', MonRef, process, _Pid, Reason }, State = #s{
 			gen_server:cast( self(), { 'gen_wp.child_terminated', Reason, Task, Child } ),
 			{ MaybeTask, NTQueue } = queue:out( TQueue ),
 			NCtx = maybe_handle_task(
-				ForkSup, MaybeTask, 
+				ForkSup, MaybeTask,
 				Ctx #gwp_ctx{
 					ref_to_pid = dict:erase( MonRef, Refs ),
 					pending_tasks = NTQueue
@@ -242,18 +298,24 @@ handle_info( Info = {'DOWN', MonRef, process, _Pid, Reason }, State = #s{
 handle_info( Info, State = #s{} ) ->
 	handle_info_passthru( Info, State ).
 
+-spec terminate( term(), #s{} ) -> ignore.
 terminate( Reason, #s{
 	mod = Mod,
 	mod_state = ModState
 } ) ->
 	Mod:terminate( Reason, ModState ).
 
-code_change( 
-	OldVsn, 
+-type vsn() ::
+	term() | { down, term() }.
+-spec code_change( vsn(), #s{}, term() ) ->
+	{ ok, #s{} } |
+	{ error, term() }.
+code_change(
+	OldVsn,
 	State = #s{
 		mod = Mod,
 		mod_state = ModState
-	}, 
+	},
 	Extra
 ) ->
 	{ ok, NModState } = Mod:code_change( OldVsn, ModState, Extra ),
@@ -294,7 +356,7 @@ maybe_handle_task( ForkSup, { value, Task }, Ctx ) ->
 	handle_task( ForkSup, Task, Ctx ).
 
 handle_task(
-	ForkSup, Task, 
+	ForkSup, Task,
 	Ctx = #gwp_ctx{
 		pending_tasks = PendingTasks,
 		max_pool_size = MaxPoolSize,

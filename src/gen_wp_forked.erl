@@ -31,13 +31,18 @@
 	reply_to :: term()
 	}).
 
+-spec start_link
+	( term(), { atom(), term() }, { cast, term() } ) -> { ok, pid() };
+	( term(), { atom(), term() }, { call, { pid(), term() }, term() } ) -> { ok, pid() }.
 start_link( WP, { Mod, Arg }, { cast, ForkMessage } ) ->
 	gen_server:start_link( ?MODULE, { cast, WP, { Mod, Arg }, ForkMessage }, [] );
 
 start_link( WP, { Mod, Arg }, { call, ReplyTo, ForkRequest } ) ->
 	gen_server:start_link( ?MODULE, { call, WP, { Mod, Arg }, ReplyTo, ForkRequest }, [] ).
 
-
+-spec init
+	( { cast, term(), { atom(), term() }, term() } ) -> { ok, #s_cast{} };
+	( { call, term(), { atom(), term() }, { pid(), term() }, term() } ) -> { ok, #s_call{} }.
 init({ cast, WP, { Mod, Arg }, ForkMessage }) ->
 	{ ok, #s_cast{
 		wp = WP,
@@ -58,9 +63,16 @@ init({ call, WP, { Mod, Arg }, ReplyTo, ForkRequest }) ->
 		reply_to = ReplyTo
 	} }.
 
+-spec handle_call( term(), { pid(), term() }, term() ) ->
+	{ stop, { badarg, term() }, term() }.
 handle_call( Request, _From, State ) ->
 	{ stop, { badarg, Request}, State}.
 
+-spec handle_cast( 'gen_wp_forked.process', #s_cast{} | #s_call{} ) ->
+	{ stop, term(), #s_cast{} } |
+	{ stop, { bad_return_value, term() }, #s_cast{} };
+				( term(), term() ) ->
+	{ stop, { badarg, term() }, term() }.
 handle_cast( 'gen_wp_forked.process', State = #s_cast{
 		wp = WP,
 		mod = Mod,
@@ -94,12 +106,16 @@ handle_cast( 'gen_wp_forked.process', State = #s_call{
 handle_cast( Request, State ) ->
 	{ stop, { badarg, Request }, State }.
 
+-spec handle_info( term(), term() ) ->
+	{ stop, { badarg, term() }, term() }.
 handle_info( Message, State ) ->
 	{ stop, { badarg, Message }, State }.
 
+-spec terminate( term(), term() ) -> ignore.
 terminate( _Reason, _State ) ->
 	ok.
 
+-spec code_change( term(), term(), term() ) -> { ok, term() }.
 code_change( _OldVsn, State, _Extra ) ->
 	{ ok, State }.
 

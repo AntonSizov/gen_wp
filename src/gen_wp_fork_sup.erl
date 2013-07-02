@@ -24,6 +24,7 @@ start_link( WP, Mod, Arg ) ->
 %% supervisor callbacks
 %% ===================================================================
 
+-spec init(term()) -> ignore.
 init( { WP, { Mod, Arg } } ) ->
 	{ok, {
 		{ simple_one_for_one, 1, 1 }, [
